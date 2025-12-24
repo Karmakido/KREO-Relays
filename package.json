@@ -1,0 +1,13 @@
+{
+  "name": "kreo-relays",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Relay discovery list and admin tools for KREO.",
+  "main": "relays.json",
+  "type": "commonjs",
+  "scripts": {
+    "validate": "node scripts/validate.js",
+    "admin": "node admin/server.js"
+  },
+  "dependencies": {}
+}

@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>KREO Relay Admin</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; background: #0f172a; color: #e2e8f0; }
+    h1 { margin-top: 0; }
+    input, select, button, textarea { padding: 8px; margin: 4px 0; border-radius: 4px; border: 1px solid #334155; background: #1e293b; color: #e2e8f0; }
+    button { cursor: pointer; background: #2563eb; border: none; color: #e2e8f0; }
+    button.secondary { background: #475569; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .field { display: flex; flex-direction: column; min-width: 180px; }
+    .panel { border: 1px solid #1e293b; padding: 16px; border-radius: 8px; margin-bottom: 16px; background: #111827; }
+    .list { max-height: 220px; overflow: auto; background: #0b1220; padding: 8px; border: 1e293b; border-radius: 6px; }
+    .status-ok { color: #22c55e; }
+    .status-fail { color: #f97316; }
+    .status-pending { color: #cbd5e1; }
+    textarea { min-height: 100px; }
+    .small { font-size: 12px; color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <h1>KREO Relay Admin</h1>
+  <div class="panel" style="border-color:#2563eb">
+    <div class="small">
+      1) Generate or paste relays. 2) Health-check. 3) Save. Optional auto-push to Git (env: GIT_AUTO_PUSH=1, GIT_REMOTE/BRANCH, git creds). Load pulls from GitHub if GITHUB_RELAYS_URL is set.
+    </div>
+  </div>
+  <div class="panel">
+    <div class="row">
+      <div class="field">
+        <label>Protocol</label>
+        <select id="protocol">
+          <option value="wss">wss://</option>
+          <option value="ws">ws://</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Host Pattern (use {N})</label>
+        <input id="hostPattern" value="kreo{N}.domain" />
+      </div>
+      <div class="field">
+        <label>Start Port</label>
+        <input id="startPort" type="number" value="6969" />
+      </div>
+      <div class="field">
+        <label>Count</label>
+        <input id="count" type="number" value="4" />
+      </div>
+      <div class="field">
+        <label>Append Port?</label>
+        <select id="appendPort">
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+      </div>
+    </div>
+    <button onclick="generate()">Generate URLs</button>
+  </div>
+
+  <div class="panel">
+    <div class="field">
+      <label>Generated URLs (editable)</label>
+      <textarea id="urlsBox"></textarea>
+      <div class="small">One URL per line. You can paste/adjust manually.</div>
+    </div>
+    <div class="row">
+      <div class="field" style="flex:1">
+        <label>Add single URL</label>
+        <input id="newUrl" placeholder="wss://relay.example.com:6969" />
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button onclick="addUrl()">Add</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Current list (click remove)</label>
+      <div class="list" id="currentList"></div>
+    </div>
+    <div class="row">
+      <button onclick="checkHealth()">Check Health</button>
+      <button class="secondary" onclick="loadCurrent()">Load current relays.json</button>
+      <button onclick="saveRelays()">Save (merge & write relays.json)</button>
+    </div>
+    <div id="status" class="small"></div>
+    <div id="gitStatus" class="small"></div>
+    <div class="list" id="results"></div>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const resultsEl = document.getElementById('results');
+    const urlsBox = document.getElementById('urlsBox');
+    const gitStatusEl = document.getElementById('gitStatus');
+    const token = localStorage.getItem('adminToken') || '';
+
+    function setStatus(text) { statusEl.textContent = text || ''; }
+    function setGitStatus(text) { gitStatusEl.textContent = text || ''; }
+
+    function getUrls() {
+      return urlsBox.value.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    }
+    function setUrls(list) {
+      const unique = Array.from(new Set(list.map(u => u.trim()).filter(Boolean)));
+      urlsBox.value = unique.join('\n');
+      renderCurrent(unique);
+    }
+
+    function generate() {
+      const proto = document.getElementById('protocol').value;
+      const hostPattern = document.getElementById('hostPattern').value || 'kreo{N}.domain';
+      const startPort = parseInt(document.getElementById('startPort').value || '6969', 10);
+      const count = parseInt(document.getElementById('count').value || '1', 10);
+      const appendPort = document.getElementById('appendPort').value === 'yes';
+      if (Number.isNaN(startPort) || Number.isNaN(count) || count < 1) {
+        setStatus('Invalid port or count');
+        return;
+      }
+      const urls = [];
+      for (let i = 0; i < count; i += 1) {
+        const host = hostPattern.replace('{N}', String(i + 1));
+        const port = startPort + i;
+        const url = appendPort ? `${proto}://${host}:${port}` : `${proto}://${host}`;
+        urls.push(url);
+      }
+      setUrls(urls);
+      setStatus(`Generated ${urls.length} URLs`);
+      resultsEl.innerHTML = '';
+    }
+
+    function addUrl() {
+      const input = document.getElementById('newUrl');
+      const url = (input.value || '').trim();
+      if (!url) {
+        setStatus('URL required');
+        return;
+      }
+      const list = getUrls();
+      list.push(url);
+      setUrls(list);
+      input.value = '';
+      setStatus('Added URL');
+    }
+
+    async function loadCurrent() {
+      setStatus('Loading current relays...');
+      resultsEl.innerHTML = '';
+      try {
+        const res = await fetch('/api/relays', { headers: token ? { 'x-admin-token': token } : {} });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        setUrls(json.relays || []);
+        if (json.source) setStatus(`Loaded ${json.relays?.length || 0} relays from ${json.source}`); else setStatus(`Loaded ${json.relays?.length || 0} relays`);
+        if (json.remote_error) setGitStatus(`Remote error: ${json.remote_error}`); else setGitStatus('');
+      } catch (e) {
+        setStatus('Load failed: ' + e.message);
+      }
+    }
+
+    async function checkHealth() {
+      const urls = getUrls();
+      if (urls.length === 0) {
+        setStatus('No URLs to check');
+        return;
+      }
+      setStatus('Checking health...');
+      resultsEl.innerHTML = '';
+      try {
+        const res = await fetch('/api/check', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { 'x-admin-token': token } : {})
+          },
+          body: JSON.stringify({ urls })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        renderResults(json.results || []);
+        const ok = (json.results || []).filter(r => r.status === 'ok').length;
+        setStatus(`Health check done: ${ok}/${urls.length} ok`);
+      } catch (e) {
+        setStatus('Health check failed: ' + e.message);
+      }
+    }
+
+    function renderResults(results) {
+      resultsEl.innerHTML = results.map(r => {
+        const cls = r.status === 'ok' ? 'status-ok' : (r.status === 'fail' ? 'status-fail' : 'status-pending');
+        return `<div><span class="${cls}">${r.status}</span> - ${r.url} (${r.detail || ''})</div>`;
+      }).join('');
+    }
+
+    async function saveRelays() {
+      const urls = getUrls();
+      if (urls.length === 0) {
+        setStatus('No URLs to save');
+        return;
+      }
+      setStatus('Saving relays.json...');
+      try {
+        const res = await fetch('/api/save', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { 'x-admin-token': token } : {})
+          },
+          body: JSON.stringify({ urls })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        setUrls(json.relays || []);
+        setStatus(`Saved. relays.json now has ${json.relays?.length || 0} entries`);
+        if (json.git) {
+          setGitStatus(`Git: ${json.git.message}`);
+        } else {
+          setGitStatus('');
+        }
+      } catch (e) {
+        setStatus('Save failed: ' + e.message);
+      }
+    }
+
+    function renderCurrent(list) {
+      const items = list.map(url => {
+        const escaped = url.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px; margin-bottom:4px;">
+          <span>${escaped}</span>
+          <button class="secondary" style="padding:4px 8px" onclick="removeUrl('${encodeURIComponent(url)}')">Remove</button>
+        </div>`;
+      });
+      document.getElementById('currentList').innerHTML = items.join('') || '<div class="small">No relays loaded.</div>';
+    }
+
+    function removeUrl(encoded) {
+      const url = decodeURIComponent(encoded);
+      const list = getUrls().filter(u => u !== url);
+      setUrls(list);
+      setStatus(`Removed ${url}`);
+    }
+
+    // Load existing on startup
+    loadCurrent();
+  </script>
+</body>
+</html>
