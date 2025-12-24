@@ -1,4 +1,5 @@
-{"relays":
+{
+  "relays":
   [
     "wss://kreo1.drydev.eu",
     "wss://kreo2.drydev.eu",
@@ -8,9 +9,9 @@
     "wss://kreo2.k4rm4k1d0.club",
     "wss://kreo3.k4rm4k1d0.club",
     "wss://kreo4.k4rm4k1d0.club",
-    "wss://relay1.tllx.eu:6969",
+    "ws://relay1.tllx.eu",
     "wss://relay2.tllx.eu:6970",
-    "wss://relay3.tllx.eu:6971",
-    "wss://relay4.tllx.eu:6972"
+    "wss://relay3.tllx.eu",
+    "ws://relay4.tllx.eu:6972"
   ]
 }
